@@ -34,7 +34,7 @@ The `CoplanarSketch` FreeCAD macro is a powerful tool designed to streamline the
     * Choose your desired option and click "OK".
 
 3.  **Post-Creation**:
-    * The new sketch will be created and automatically in the tree view.
+    * The new sketch will be created and automatically selected in the tree view.
     * You can then enter the sketch to convert the construction to regular or add further geometry, dimensions, and constraints.
 
 ## Compatibility
