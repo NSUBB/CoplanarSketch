@@ -1,7 +1,7 @@
 # CoplanarSketch FreeCAD Macro
 
 ## Overview
-The `CoplanarSketch` FreeCAD macro is a powerful tool designed to streamline the creation of sketches from existing 3D geometry, specifically focusing on **coplanar edges** found on tessellated solid bodies. It automates the process of identifying and selecting edges that lie on the same plane, then generates a new sketch containing these edges as construction geometry, correctly oriented in space.
+The `CoplanarSketch` FreeCAD macro is a powerful tool designed to streamline the creation of sketches from existing 3D geometry, specifically focusing on **coplanar edges** found on tessellated solid bodies such as those converted from Mesh objects imported from STL files. It automates the process of identifying and selecting edges that lie on the same plane, then generates a new sketch containing these edges as construction geometry, correctly oriented in space.
 
 ![image](https://github.com/user-attachments/assets/88df8cf1-5ee3-4aa6-868f-9386a0d87e94)
 
