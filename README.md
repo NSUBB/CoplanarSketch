@@ -51,3 +51,7 @@ While it may work on other versions or operating systems, compatibility is ensur
 
 ## Contribution & Feedback
 Feel free to open issues on this repository if you encounter any bugs or have suggestions for improvements.
+
+## Version History
+- 250608 Initial version.
+ - 250627 Improved geometry to sketch translation fixing bug when selected edges were coplanar with global XY plane. Added sketch normal direction logic based on selected edges comparison to center mass. Edge selections away from the model center of mass now get their sketches created with proper sketch normal facing away from the center of mass. Improved messaging inside the docker.
