@@ -1,5 +1,7 @@
 # CoplanarSketch FreeCAD Macro
-![CoplanarSketch](https://github.com/user-attachments/assets/8447147a-78c9-40ff-8ce8-0d9e9e3bba24)
+
+<img width="128" height="128" alt="CoplanarSketch" src="https://github.com/user-attachments/assets/a941d04a-1707-400b-bd9c-d0751c8ea021" />
+
 Forum Post: https://forum.freecad.org/viewtopic.php?p=830918#p830918
 
 ## Overview
