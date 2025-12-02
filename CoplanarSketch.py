@@ -291,49 +291,92 @@ class EdgeDataCollector(QDockWidget):
         return FreeCAD.Placement(center, rotation)
 
     def create_standalone_sketch(self, temp_sketch, edges):
-        """Create standalone sketch using current stable implementation"""
+        """Create standalone sketch using optimized implementation"""
         doc = FreeCAD.ActiveDocument
+
+        FreeCAD.Console.PrintMessage(f"DEBUG: Creating standalone sketch for {len(edges)} edges\n")
 
         final_sketch = doc.addObject("Sketcher::SketchObject", "Sketch")
         final_sketch.Placement = temp_sketch.Placement
-        doc.recompute()
+
+        FreeCAD.Console.PrintMessage("DEBUG: Sketch object created, caching placement\n")
+
+        # Cache the inverse placement once
+        inverse_placement = final_sketch.getGlobalPlacement().inverse()
 
         edge_map = {}
         tolerance = 0.001
-        for edge in edges:
+
+        FreeCAD.Console.PrintMessage(f"DEBUG: Adding {len(edges)} geometries...\n")
+
+        # Check for duplicate edges in source
+        edge_signatures = set()
+        duplicate_edges = 0
+
+        # Add all geometry first (this is the slow part for large sketches)
+        geo_count = 0
+        for i, edge in enumerate(edges):
+            if i % 500 == 0 and i > 0:
+                FreeCAD.Console.PrintMessage(f"DEBUG: Added {i}/{len(edges)} geometries\n")
+
             v_start, v_end = edge.Vertexes[0].Point, edge.Vertexes[-1].Point
             if (v_start - v_end).Length < tolerance:
                 continue  # Skip degenerate
 
-            v_start_local = final_sketch.getGlobalPlacement().inverse().multVec(v_start)
-            v_end_local = final_sketch.getGlobalPlacement().inverse().multVec(v_end)
+            # Create signature to detect duplicate edges (check both directions)
+            sig1 = (round(v_start.x, 4), round(v_start.y, 4), round(v_start.z, 4),
+                    round(v_end.x, 4), round(v_end.y, 4), round(v_end.z, 4))
+            sig2 = (round(v_end.x, 4), round(v_end.y, 4), round(v_end.z, 4),
+                    round(v_start.x, 4), round(v_start.y, 4), round(v_start.z, 4))
+
+            if sig1 in edge_signatures or sig2 in edge_signatures:
+                duplicate_edges += 1
+                continue  # Skip duplicate
+            edge_signatures.add(sig1)
+
+            v_start_local = inverse_placement.multVec(v_start)
+            v_end_local = inverse_placement.multVec(v_end)
 
             geo_index = final_sketch.addGeometry(Part.LineSegment(v_start_local, v_end_local), False)
             final_sketch.setConstruction(geo_index, True)
+            geo_count += 1
 
+            # Build edge map for constraints
             for point, vid in [(v_start, 1), (v_end, 2)]:
                 key = (round(point.x, 5), round(point.y, 5), round(point.z, 5))
                 edge_map.setdefault(key, []).append((geo_index, vid))
 
-        for group in edge_map.values():
-            base = group[0]
-            for other in group[1:]:
-                try:
-                    final_sketch.addConstraint(Sketcher.Constraint('Coincident', base[0], base[1], other[0], other[1]))
-                except Exception as e:
-                    FreeCAD.Console.PrintWarning(f"Coincident error: {e}\n")
+        FreeCAD.Console.PrintMessage(f"DEBUG: All {geo_count} geometries added ({duplicate_edges} duplicates skipped), now adding constraints\n")
 
-        return final_sketch
+        # Add critical constraints only (fast mode for all sketch sizes)
+        constraint_count, skipped_count = self._add_critical_constraints_fast(final_sketch, edge_map, len(edges))
+
+        FreeCAD.Console.PrintMessage(f"DEBUG: Constraints added, calling recompute\n")
+
+        # Single recompute at the end
+        doc.recompute()
+
+        FreeCAD.Console.PrintMessage(f"DEBUG: Recompute complete, returning sketch with stats\n")
+
+        # Return sketch and constraint info separately (can't set arbitrary attributes on Sketcher objects)
+        return final_sketch, constraint_count, skipped_count
 
     def create_body_sketch(self, temp_sketch, edges, target_body):
-        """Create sketch attached to PartDesign body"""
+        """Create sketch attached to PartDesign body - optimized version"""
+        FreeCAD.Console.PrintMessage(f"DEBUG: create_body_sketch CALLED with {len(edges)} edges\n")
+
         doc = FreeCAD.ActiveDocument
 
+        FreeCAD.Console.PrintMessage(f"DEBUG: About to create SketchObject\n")
         final_sketch = doc.addObject("Sketcher::SketchObject", "Sketch")
+        FreeCAD.Console.PrintMessage(f"DEBUG: SketchObject created\n")
 
         # Add sketch to body
+        FreeCAD.Console.PrintMessage(f"DEBUG: About to add sketch to body\n")
         target_body.ViewObject.dropObject(final_sketch, None, '', [])
-        doc.recompute()
+        FreeCAD.Console.PrintMessage(f"DEBUG: Sketch added to body\n")
+
+        FreeCAD.Console.PrintMessage("DEBUG: Sketch added to body, setting up attachment\n")
 
         # Set up attachment to body origin
         final_sketch.AttachmentSupport = [(target_body.Origin.OriginFeatures[0], '')]
@@ -342,35 +385,108 @@ class EdgeDataCollector(QDockWidget):
         final_sketch.AttachmentOffset.Rotation = temp_sketch.Placement.Rotation
         final_sketch.Placement = FreeCAD.Placement()
 
-        doc.recompute()
+        # Cache the inverse placement once
+        inverse_placement = final_sketch.getGlobalPlacement().inverse()
 
-        # Add geometry (same as standalone)
         edge_map = {}
         tolerance = 0.001
-        for edge in edges:
+
+        FreeCAD.Console.PrintMessage(f"DEBUG: Adding {len(edges)} geometries...\n")
+
+        # Check for duplicate edges in source
+        edge_signatures = set()
+        duplicate_edges = 0
+
+        # Add all geometry first
+        geo_count = 0
+        for i, edge in enumerate(edges):
+            if i % 500 == 0 and i > 0:
+                FreeCAD.Console.PrintMessage(f"DEBUG: Added {i}/{len(edges)} geometries\n")
+
             v_start, v_end = edge.Vertexes[0].Point, edge.Vertexes[-1].Point
             if (v_start - v_end).Length < tolerance:
-                continue  # Skip degenerate
+                continue
 
-            v_start_local = final_sketch.getGlobalPlacement().inverse().multVec(v_start)
-            v_end_local = final_sketch.getGlobalPlacement().inverse().multVec(v_end)
+            # Create signature to detect duplicate edges (check both directions)
+            sig1 = (round(v_start.x, 4), round(v_start.y, 4), round(v_start.z, 4),
+                    round(v_end.x, 4), round(v_end.y, 4), round(v_end.z, 4))
+            sig2 = (round(v_end.x, 4), round(v_end.y, 4), round(v_end.z, 4),
+                    round(v_start.x, 4), round(v_start.y, 4), round(v_start.z, 4))
+
+            if sig1 in edge_signatures or sig2 in edge_signatures:
+                duplicate_edges += 1
+                continue  # Skip duplicate
+            edge_signatures.add(sig1)
+
+            v_start_local = inverse_placement.multVec(v_start)
+            v_end_local = inverse_placement.multVec(v_end)
 
             geo_index = final_sketch.addGeometry(Part.LineSegment(v_start_local, v_end_local), False)
             final_sketch.setConstruction(geo_index, True)
+            geo_count += 1
 
             for point, vid in [(v_start, 1), (v_end, 2)]:
                 key = (round(point.x, 5), round(point.y, 5), round(point.z, 5))
                 edge_map.setdefault(key, []).append((geo_index, vid))
 
-        for group in edge_map.values():
-            base = group[0]
-            for other in group[1:]:
-                try:
-                    final_sketch.addConstraint(Sketcher.Constraint('Coincident', base[0], base[1], other[0], other[1]))
-                except Exception as e:
-                    FreeCAD.Console.PrintWarning(f"Coincident error: {e}\n")
+        FreeCAD.Console.PrintMessage(f"DEBUG: All {geo_count} geometries added ({duplicate_edges} duplicates skipped), now adding constraints\n")
 
-        return final_sketch
+        # Add critical constraints only (fast mode for all sketch sizes)
+        constraint_count, skipped_count = self._add_critical_constraints_fast(final_sketch, edge_map, len(edges))
+
+        FreeCAD.Console.PrintMessage(f"DEBUG: Constraints added ({constraint_count} added, {skipped_count} skipped), calling recompute\n")
+
+        # Single recompute at the end
+        doc.recompute()
+
+        FreeCAD.Console.PrintMessage(f"DEBUG: Recompute complete, returning sketch with stats\n")
+
+        # Return sketch and constraint info separately (can't set arbitrary attributes on Sketcher objects)
+        return final_sketch, constraint_count, skipped_count
+
+    def _add_critical_constraints_fast(self, sketch, edge_map, total_edges):
+        """Add only critical constraints to maintain connectivity - works for all sketch sizes"""
+        constraint_count = 0
+        skipped_count = 0
+        failed_count = 0
+
+        # Temporarily set sketch to not solve automatically during constraint addition
+        # This prevents the solver from running after each constraint
+        original_auto_solve = sketch.getSolverStatus() if hasattr(sketch, 'getSolverStatus') else None
+        if hasattr(sketch, 'setAutomaticSolve'):
+            try:
+                sketch.setAutomaticSolve(False)
+            except:
+                pass  # Some FreeCAD versions may not support this
+
+        # Only add ONE constraint per group (connect first to second only)
+        # This maintains connectivity while avoiding constraint explosion
+        for group in edge_map.values():
+            if len(group) > 1:
+                base = group[0]
+                other = group[1]
+                try:
+                    sketch.addConstraint(Sketcher.Constraint('Coincident', base[0], base[1], other[0], other[1]))
+                    constraint_count += 1
+                except Exception as e:
+                    failed_count += 1
+                    if failed_count < 5:  # Print first few failures for debugging
+                        FreeCAD.Console.PrintWarning(f"Constraint failed: {e}\n")
+
+                # Skip the rest of the group to avoid redundant constraints
+                skipped_count += len(group) - 2
+
+        # Re-enable automatic solving
+        if hasattr(sketch, 'setAutomaticSolve'):
+            try:
+                sketch.setAutomaticSolve(True)
+            except:
+                pass
+
+        FreeCAD.Console.PrintMessage(f"DEBUG: Constraint summary - added: {constraint_count}, failed: {failed_count}, skipped: {skipped_count}\n")
+
+        # Log summary after completion (will appear in info_display via calling function)
+        return constraint_count, skipped_count
 
     def show_destination_dialog(self):
         """Show destination dialog and return choice info"""
@@ -432,6 +548,7 @@ class EdgeDataCollector(QDockWidget):
 
         try:
             FreeCAD.Console.PrintMessage("DEBUG: Starting sketch creation\n")
+            FreeCAD.Console.PrintMessage(f"DEBUG: Processing selection\n")
 
             selected_edges = []
             selected_objects = FreeCADGui.Selection.getSelectionEx()
@@ -448,11 +565,24 @@ class EdgeDataCollector(QDockWidget):
 
             FreeCAD.Console.PrintMessage(f"DEBUG: Found {len(selected_edges)} edges\n")
 
-            all_vertices = [v.Point for edge in selected_edges for v in edge.Vertexes]
+            # Optimize vertex collection - don't create intermediate list of all vertices
+            FreeCAD.Console.PrintMessage("DEBUG: Collecting unique vertices\n")
             unique_vertices = []
-            for p in all_vertices:
-                if not any((p - q).Length < 1e-4 for q in unique_vertices):
-                    unique_vertices.append(p)
+            tolerance_sq = 1e-8  # Use squared distance to avoid sqrt calls
+
+            for edge in selected_edges:
+                for v in edge.Vertexes:
+                    p = v.Point
+                    # Check if this point is already in our list using squared distance
+                    is_duplicate = False
+                    for q in unique_vertices:
+                        # Squared distance comparison is much faster than .Length
+                        dx, dy, dz = p.x - q.x, p.y - q.y, p.z - q.z
+                        if (dx*dx + dy*dy + dz*dz) < tolerance_sq:
+                            is_duplicate = True
+                            break
+                    if not is_duplicate:
+                        unique_vertices.append(p)
 
             FreeCAD.Console.PrintMessage(f"DEBUG: Found {len(unique_vertices)} unique vertices\n")
 
@@ -461,40 +591,47 @@ class EdgeDataCollector(QDockWidget):
 
             FreeCAD.Console.PrintMessage("DEBUG: Calculated placement\n")
 
-            # Create temporary sketch for placement calculation
-            temp_sketch = doc.addObject("Sketcher::SketchObject", "TempSketch")
-            temp_sketch.Placement = placement
-            doc.recompute()
-
-            FreeCAD.Console.PrintMessage("DEBUG: Created temp sketch, about to call dialog\n")
-
-            # Show destination dialog
+            # Show destination dialog FIRST, before creating any sketches
+            FreeCAD.Console.PrintMessage("DEBUG: About to show dialog\n")
             choice = self.show_destination_dialog()
             FreeCAD.Console.PrintMessage(f"DEBUG: Dialog returned: {choice}\n")
 
             if not choice:
                 self.info_display.append("Sketch creation cancelled by user.")
-                if temp_sketch:
-                    doc.removeObject(temp_sketch.Name)
                 doc.abortTransaction()
                 return
 
+            # Now create temp sketch for placement (only after user confirms)
+            FreeCAD.Console.PrintMessage("DEBUG: Creating temp sketch\n")
+            temp_sketch = doc.addObject("Sketcher::SketchObject", "TempSketch")
+            temp_sketch.Placement = placement
+            doc.recompute()
+            FreeCAD.Console.PrintMessage("DEBUG: Temp sketch created\n")
+
             # Create sketch based on user choice
+            FreeCAD.Console.PrintMessage(f"DEBUG: Creating final sketch for {len(selected_edges)} edges\n")
+            constraint_count = 0
+            skipped_count = 0
+
             if choice["type"] == "standalone":
-                final_sketch = self.create_standalone_sketch(temp_sketch, selected_edges)
+                final_sketch, constraint_count, skipped_count = self.create_standalone_sketch(temp_sketch, selected_edges)
             elif choice["type"] == "new_body":
                 # Create new body first
+                FreeCAD.Console.PrintMessage("DEBUG: Creating new body\n")
                 target_body = doc.addObject("PartDesign::Body", "NewBody")
-                doc.recompute()
-                final_sketch = self.create_body_sketch(temp_sketch, selected_edges, target_body)
+                FreeCAD.Console.PrintMessage("DEBUG: Body created, now creating sketch\n")
+                # Don't recompute here - let the sketch creation handle it
+                final_sketch, constraint_count, skipped_count = self.create_body_sketch(temp_sketch, selected_edges, target_body)
             elif choice["type"] == "existing_body":
                 # Get existing body
                 target_body = doc.getObject(choice["body_name"])
                 if not target_body:
                     self.info_display.append(f"Error: Body {choice['body_name']} not found.")
+                    if temp_sketch:
+                        doc.removeObject(temp_sketch.Name)
                     doc.abortTransaction()
                     return
-                final_sketch = self.create_body_sketch(temp_sketch, selected_edges, target_body)
+                final_sketch, constraint_count, skipped_count = self.create_body_sketch(temp_sketch, selected_edges, target_body)
 
             doc.recompute()
             FreeCADGui.Selection.clearSelection()
@@ -502,8 +639,22 @@ class EdgeDataCollector(QDockWidget):
             FreeCADGui.activeDocument().activeView().viewAxonometric()
             FreeCADGui.activeDocument().activeView().fitAll()
 
+            # Clean up temporary sketch now that we're done
+            try:
+                if temp_sketch is not None:
+                    doc.removeObject(temp_sketch.Name)
+                    doc.recompute()
+            except Exception as e:
+                FreeCAD.Console.PrintWarning(f"Could not remove temporary sketch: {e}\n")
+
+            # Report constraint statistics
+            if constraint_count > 0:
+                self.info_display.append(f"Added {constraint_count} coincident constraints.")
+                if skipped_count > 0:
+                    self.info_display.append(f"Skipped {skipped_count} redundant constraints for performance.")
+
             duration = time.time() - start_time
-            self.info_display.append("Sketch created with destination dialog selection.")
+            self.info_display.append("Sketch created successfully.")
             self.info_display.append(f"Elapsed time: {duration:.4f} seconds.\n")
             doc.commitTransaction()
 
@@ -511,14 +662,14 @@ class EdgeDataCollector(QDockWidget):
             doc.abortTransaction()
             self.info_display.append(f"Sketch creation failed:\n{e}")
             FreeCAD.Console.PrintError(f"Sketch error: {e}\n")
-        finally:
-            # Clean up temporary sketch
-            if temp_sketch and hasattr(temp_sketch, 'Name'):
-                try:
+            import traceback
+            FreeCAD.Console.PrintError(traceback.format_exc())
+            # Try to clean up temp sketch on error too
+            try:
+                if temp_sketch is not None:
                     doc.removeObject(temp_sketch.Name)
-                    doc.recompute()
-                except Exception as e:
-                    FreeCAD.Console.PrintWarning(f"Could not remove temporary sketch: {e}\n")
+            except:
+                pass
 
     def clean_degenerate_edges(self):
         doc = FreeCAD.ActiveDocument
